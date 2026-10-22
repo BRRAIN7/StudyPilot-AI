@@ -34,7 +34,10 @@ The API allows the local Vite origin `http://localhost:5173` by default. To
 override it, set `STUDYPILOT_CORS_ORIGINS` to a comma-separated list of origins
 before starting Uvicorn. See `backend/.env.example` for the variable format;
 the application reads environment variables directly and does not load `.env`
-files.
+files. SQLite persistence defaults to `sqlite:///./studypilot.db` relative to
+the backend working directory; set `STUDYPILOT_DATABASE_URL` to use another
+SQLAlchemy-supported database URL. Tables are initialized automatically when
+the API starts.
 
 ## Study plan generation
 
@@ -46,3 +49,8 @@ behavior, and the reviewer is identified as a deterministic fallback. To enable
 Groq-based prioritization explanations, planner advice, and review, set
 `GROQ_API_KEY` and optionally `GROQ_MODEL` in the environment before starting
 the API.
+
+Generated plans are saved and can be retrieved with `GET /api/plan/{plan_id}`.
+Record a session outcome with `PATCH /api/plan/{plan_id}/sessions/{session_id}/progress`,
+then request an adaptive update with `POST /api/plan/{plan_id}/replan`.
+Progress analytics are available from `GET /api/progress/analytics`.

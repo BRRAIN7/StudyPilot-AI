@@ -4,7 +4,14 @@ from enum import StrEnum
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from app.core.config import settings
 
@@ -109,9 +116,14 @@ class SubjectInput(APIModel):
 
     @field_validator("exam_date")
     @classmethod
-    def exam_date_must_not_be_in_the_past(cls, value: Date) -> Date:
+    def exam_date_must_not_be_in_the_past(
+        cls, value: Date, info: ValidationInfo
+    ) -> Date:
         today = datetime.now(ZoneInfo(settings.timezone)).date()
-        if value < today:
+        allow_past = bool(
+            info.context and info.context.get("allow_past_exam_dates")
+        )
+        if value < today and not allow_past:
             raise ValueError("Exam date cannot be in the past.")
         return value
 
@@ -256,6 +268,7 @@ class PlannerAgentInput(APIModel):
     revision_focus_topic_ids: list[str]
     as_of: Date
     now: datetime
+    reserved_sessions: list[StudySession] = Field(default_factory=list)
 
 
 class PlannerAgentOutput(APIModel):
@@ -272,6 +285,7 @@ class FeasibilityAgentInput(APIModel):
     priorities: list[TopicPriority]
     schedule: list[StudySession]
     as_of: Date
+    reserved_sessions: list[StudySession] = Field(default_factory=list)
 
 
 class ReviewerAgentInput(APIModel):
@@ -280,6 +294,7 @@ class ReviewerAgentInput(APIModel):
     schedule: list[StudySession]
     feasibility: FeasibilityReport
     revision: int
+    reserved_sessions: list[StudySession] = Field(default_factory=list)
 
 
 class AgentTraceEntry(APIModel):
@@ -302,3 +317,63 @@ class PlanResponse(APIModel):
     warnings: list[str]
     agent_mode: Literal["groq", "deterministic_fallback"]
     execution_trace: list[AgentTraceEntry]
+
+
+class ProgressStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    PARTIALLY_COMPLETED = "partially_completed"
+    MISSED = "missed"
+
+
+class ProgressUpdateRequest(APIModel):
+    status: Literal["completed", "partially_completed", "missed"]
+    actual_minutes: int | None = Field(default=None, ge=0, le=1440)
+
+    @model_validator(mode="after")
+    def validate_actual_time(self) -> "ProgressUpdateRequest":
+        if self.status == "missed" and self.actual_minutes not in (None, 0):
+            raise ValueError("A missed session cannot have actual study time.")
+        return self
+
+
+class ProgressHistoryEntry(APIModel):
+    status: ProgressStatus
+    actual_minutes: int | None
+    recorded_at: datetime
+
+
+class PersistedStudySession(StudySession):
+    session_id: str
+    progress_status: ProgressStatus
+    actual_minutes: int | None
+    is_current: bool
+    progress_history: list[ProgressHistoryEntry] = Field(default_factory=list)
+
+
+class SavedPlanResponse(PlanResponse):
+    plan_id: str
+    created_at: datetime
+    updated_at: datetime
+    replan_count: int
+    schedule: list[PersistedStudySession]
+
+
+class PlanSummary(APIModel):
+    plan_id: str
+    created_at: datetime
+    updated_at: datetime
+    session_count: int
+    passed_feasibility: bool
+
+
+class ProgressAnalyticsResponse(APIModel):
+    total_plans: int
+    total_sessions: int
+    tracked_sessions: int
+    completed_sessions: int
+    partially_completed_sessions: int
+    missed_sessions: int
+    recorded_study_minutes: int
+    completion_rate_percent: float
+    recent_plans: list[PlanSummary]

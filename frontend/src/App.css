@@ -1551,3 +1551,280 @@
     width: calc(100% - 32px);
   }
 }
+
+.plan-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary-action:disabled,
+.progress-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.progress-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #d7eadf;
+  border-radius: 7px;
+  background: #f6fbf7;
+  color: #397853;
+  font-size: 11px;
+}
+
+.session-row {
+  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 2fr) auto;
+}
+
+.session-progress {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-status {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #f2f1f6;
+  color: #6e6e7d;
+  font-size: 9px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.session-status.is-completed {
+  background: #edf8f0;
+  color: #397853;
+}
+
+.session-status.is-partially_completed {
+  background: #fff6e8;
+  color: #8c642b;
+}
+
+.session-status.is-missed {
+  background: #fff0f0;
+  color: #a34450;
+}
+
+.session-progress-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.actual-time-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #858596;
+  font-size: 9px;
+}
+
+.actual-time-field input {
+  width: 76px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid #e3e2eb;
+  border-radius: 5px;
+  color: #55566a;
+  font: inherit;
+  font-size: 10px;
+}
+
+.progress-action {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #e3e2eb;
+  border-radius: 5px;
+  background: #fff;
+  color: #6258a6;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.progress-action:hover {
+  border-color: #b8b0e8;
+  background: #f7f5ff;
+}
+
+.session-actual-time,
+.session-history-count {
+  color: #898a99;
+  font-size: 9px;
+}
+
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 15px;
+}
+
+.analytics-metric {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 17px;
+  border: 1px solid #e9e8f1;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(40, 38, 73, 0.025);
+}
+
+.analytics-metric > span {
+  color: #7f8091;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.analytics-metric > strong {
+  color: #343348;
+  font-size: 25px;
+  font-weight: 680;
+  letter-spacing: -0.6px;
+}
+
+.analytics-metric > small {
+  color: #9293a3;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.analytics-outcomes,
+.analytics-plan-section {
+  margin-top: 15px;
+  padding: 19px 21px;
+  border: 1px solid #e9e8f1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(40, 38, 73, 0.025);
+}
+
+.analytics-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 25px;
+}
+
+.analytics-outcomes > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #777889;
+  font-size: 10px;
+}
+
+.analytics-outcomes strong {
+  color: #45445a;
+}
+
+.outcome-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a8a8b5;
+}
+
+.outcome-dot.is-completed {
+  background: #55ad7a;
+}
+
+.outcome-dot.is-partial {
+  background: #d69b43;
+}
+
+.outcome-dot.is-missed {
+  background: #d56672;
+}
+
+.analytics-plan-list {
+  display: grid;
+}
+
+.analytics-plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid #efeff4;
+}
+
+.analytics-plan-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.analytics-plan-row > div strong {
+  color: #45445a;
+  font-size: 11px;
+}
+
+.analytics-plan-row > div span {
+  color: #898a99;
+  font-size: 9px;
+}
+
+.analytics-error .secondary-action {
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .analytics-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .plan-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .plan-toolbar-actions .secondary-action {
+    flex: 1 1 auto;
+  }
+
+  .session-progress {
+    align-items: flex-start;
+  }
+
+  .session-progress-controls {
+    width: 100%;
+  }
+
+  .session-row {
+    grid-template-columns: minmax(77px, 0.8fr) minmax(0, 1.5fr) auto;
+  }
+
+  .analytics-metrics {
+    gap: 8px;
+  }
+
+  .analytics-metric {
+    padding: 13px 11px;
+  }
+
+  .analytics-metric > strong {
+    font-size: 21px;
+  }
+
+  .analytics-plan-section,
+  .analytics-outcomes {
+    padding: 16px 14px;
+  }
+
+  .analytics-plan-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

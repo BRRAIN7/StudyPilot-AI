@@ -2,14 +2,20 @@ import {
   useEffect,
   useRef,
   useState,
+  useCallback,
   type FormEvent,
   type ReactNode,
 } from 'react'
 import {
   fetchHealth,
+  fetchSavedStudyPlan,
   generateStudyPlan,
-  type StudyPlanResponse,
+  replanStudyPlan,
+  updateSessionProgress,
+  type ProgressStatus,
+  type SavedStudyPlan,
 } from './lib/api'
+import { ProgressAnalyticsPage } from './ProgressAnalytics'
 import { StudyPlanResults } from './StudyPlanResults'
 import './App.css'
 
@@ -234,15 +240,52 @@ function SectionHeading({
   )
 }
 
-function StudyPlannerPage() {
+function StudyPlannerPage({
+  planToLoadId,
+  onPlanLoaded,
+}: {
+  planToLoadId: string | null
+  onPlanLoaded: () => void
+}) {
   const [form, setForm] = useState<StudyPlanForm>(() => initialForm())
   const [hasSubmitted, setHasSubmitted] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [requestError, setRequestError] = useState('')
-  const [planResult, setPlanResult] = useState<StudyPlanResponse | null>(null)
+  const [planResult, setPlanResult] = useState<SavedStudyPlan | null>(null)
   const [showResults, setShowResults] = useState(false)
+  const [progressBusySessionId, setProgressBusySessionId] = useState<string | null>(null)
+  const [progressMessage, setProgressMessage] = useState('')
+  const [progressError, setProgressError] = useState('')
+  const [isReplanning, setIsReplanning] = useState(false)
   const requestInProgress = useRef(false)
   const errors = hasSubmitted ? validateForm(form) : {}
+  const isLoadingSavedPlan = planToLoadId !== null
+
+  useEffect(() => {
+    if (!planToLoadId) return
+    let cancelled = false
+    fetchSavedStudyPlan(planToLoadId)
+      .then((savedPlan) => {
+        if (cancelled) return
+        setRequestError('')
+        setPlanResult(savedPlan)
+        setShowResults(true)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setShowResults(false)
+        setRequestError(
+          error instanceof Error ? error.message : 'Unable to load this saved plan.',
+        )
+      })
+      .finally(() => {
+        if (cancelled) return
+        onPlanLoaded()
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [planToLoadId, onPlanLoaded])
 
   function updateSubject(
     subjectId: string,
@@ -328,7 +371,51 @@ function StudyPlannerPage() {
       })
   }
 
-  if (showResults && planResult) {
+  async function handleProgressUpdate(
+    sessionId: string,
+    status: Exclude<ProgressStatus, 'scheduled'>,
+    actualMinutes?: number,
+  ) {
+    if (!planResult || progressBusySessionId) return
+    setProgressBusySessionId(sessionId)
+    setProgressError('')
+    setProgressMessage('')
+    try {
+      const updated = await updateSessionProgress(
+        planResult.planId,
+        sessionId,
+        status,
+        actualMinutes,
+      )
+      setPlanResult(updated)
+      setProgressMessage('Session progress saved.')
+    } catch (error: unknown) {
+      setProgressError(
+        error instanceof Error ? error.message : 'Unable to save session progress.',
+      )
+    } finally {
+      setProgressBusySessionId(null)
+    }
+  }
+
+  async function handleReplan() {
+    if (!planResult || isReplanning) return
+    setIsReplanning(true)
+    setProgressError('')
+    setProgressMessage('')
+    try {
+      setPlanResult(await replanStudyPlan(planResult.planId))
+      setProgressMessage('The remaining schedule has been replanned.')
+    } catch (error: unknown) {
+      setProgressError(
+        error instanceof Error ? error.message : 'Unable to replan this study plan.',
+      )
+    } finally {
+      setIsReplanning(false)
+    }
+  }
+
+  if (showResults && planResult && !isLoadingSavedPlan) {
     return (
       <>
         <div className="page-heading planner-page-heading">
@@ -341,6 +428,12 @@ function StudyPlannerPage() {
         <StudyPlanResults
           plan={planResult}
           onEdit={() => setShowResults(false)}
+          onProgressUpdate={handleProgressUpdate}
+          progressBusySessionId={progressBusySessionId}
+          progressMessage={progressMessage}
+          progressError={progressError}
+          onReplan={handleReplan}
+          isReplanning={isReplanning}
         />
       </>
     )
@@ -819,7 +912,13 @@ function StudyPlannerPage() {
             Contacting the planning agents…
           </p>
         )}
-        {requestError && (
+        {isLoadingSavedPlan && (
+          <p className="request-loading" role="status">
+            <span className="request-spinner" aria-hidden="true" />
+            Loading saved study plan…
+          </p>
+        )}
+        {requestError && !isLoadingSavedPlan && (
           <div className="request-error" role="alert">
             <strong>We couldn’t generate your plan.</strong>
             <p>{requestError}</p>
@@ -831,7 +930,11 @@ function StudyPlannerPage() {
   )
 }
 
-function PlaceholderPage({ page }: { page: Exclude<Page, 'Study Planner'> }) {
+function PlaceholderPage({
+  page,
+}: {
+  page: Exclude<Page, 'Study Planner' | 'Progress Analytics'>
+}) {
   return (
     <>
       <div className="page-heading">
@@ -908,6 +1011,13 @@ function BackendConnectionStatus() {
 
 function App() {
   const [activePage, setActivePage] = useState<Page>('Study Planner')
+  const [planToLoadId, setPlanToLoadId] = useState<string | null>(null)
+  const clearPlanToLoadId = useCallback(() => setPlanToLoadId(null), [])
+
+  function openSavedPlan(planId: string) {
+    setPlanToLoadId(planId)
+    setActivePage('Study Planner')
+  }
 
   return (
     <div className="app-shell">
@@ -957,11 +1067,18 @@ function App() {
 
         <main className="page-content">
           <div hidden={activePage !== 'Study Planner'}>
-            <StudyPlannerPage />
+            <StudyPlannerPage
+              planToLoadId={planToLoadId}
+              onPlanLoaded={clearPlanToLoadId}
+            />
           </div>
-          {activePage !== 'Study Planner' && (
-            <PlaceholderPage page={activePage} />
+          {activePage === 'Progress Analytics' && (
+            <ProgressAnalyticsPage onOpenPlan={openSavedPlan} />
           )}
+          {activePage !== 'Study Planner' &&
+            activePage !== 'Progress Analytics' && (
+              <PlaceholderPage page={activePage} />
+            )}
         </main>
       </div>
     </div>

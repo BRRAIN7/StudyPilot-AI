@@ -98,6 +98,50 @@ export type StudyPlanResponse = {
   }[]
 }
 
+export type ProgressStatus =
+  | 'scheduled'
+  | 'completed'
+  | 'partially_completed'
+  | 'missed'
+
+export type PersistedPlanSession = PlanSession & {
+  sessionId: string
+  progressStatus: ProgressStatus
+  actualMinutes: number | null
+  isCurrent: boolean
+  progressHistory: {
+    status: ProgressStatus
+    actualMinutes: number | null
+    recordedAt: string
+  }[]
+}
+
+export type SavedStudyPlan = Omit<StudyPlanResponse, 'schedule'> & {
+  planId: string
+  createdAt: string
+  updatedAt: string
+  replanCount: number
+  schedule: PersistedPlanSession[]
+}
+
+export type ProgressAnalytics = {
+  totalPlans: number
+  totalSessions: number
+  trackedSessions: number
+  completedSessions: number
+  partiallyCompletedSessions: number
+  missedSessions: number
+  recordedStudyMinutes: number
+  completionRatePercent: number
+  recentPlans: {
+    planId: string
+    createdAt: string
+    updatedAt: string
+    sessionCount: number
+    passedFeasibility: boolean
+  }[]
+}
+
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 
@@ -211,6 +255,74 @@ function isPlanResponse(value: unknown): value is StudyPlanResponse {
   )
 }
 
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || isNumber(value)
+}
+
+function isPersistedPlan(value: unknown): value is SavedStudyPlan {
+  if (!isRecord(value)) return false
+  const planRecord: Record<string, unknown> = value
+  if (!isPlanResponse(value)) return false
+  if (
+    !isString(planRecord.planId) ||
+    !isString(planRecord.createdAt) ||
+    !isString(planRecord.updatedAt) ||
+    !isNumber(planRecord.replanCount)
+  ) {
+    return false
+  }
+  const sessions = planRecord.schedule
+  if (!Array.isArray(sessions)) return false
+  return sessions.every((session: unknown) => {
+    if (
+      !isRecord(session) ||
+      !isString(session.sessionId) ||
+      (session.progressStatus !== 'scheduled' &&
+        session.progressStatus !== 'completed' &&
+        session.progressStatus !== 'partially_completed' &&
+        session.progressStatus !== 'missed') ||
+      !isNullableNumber(session.actualMinutes) ||
+      typeof session.isCurrent !== 'boolean' ||
+      !Array.isArray(session.progressHistory)
+    ) {
+      return false
+    }
+    return session.progressHistory.every((entry: unknown) =>
+      isRecord(entry) &&
+      (entry.status === 'scheduled' ||
+        entry.status === 'completed' ||
+        entry.status === 'partially_completed' ||
+        entry.status === 'missed') &&
+      isNullableNumber(entry.actualMinutes) &&
+      isString(entry.recordedAt),
+    )
+  })
+}
+
+function isProgressAnalytics(value: unknown): value is ProgressAnalytics {
+  return (
+    isRecord(value) &&
+    isNumber(value.totalPlans) &&
+    isNumber(value.totalSessions) &&
+    isNumber(value.trackedSessions) &&
+    isNumber(value.completedSessions) &&
+    isNumber(value.partiallyCompletedSessions) &&
+    isNumber(value.missedSessions) &&
+    isNumber(value.recordedStudyMinutes) &&
+    isNumber(value.completionRatePercent) &&
+    Array.isArray(value.recentPlans) &&
+    value.recentPlans.every(
+      (plan) =>
+        isRecord(plan) &&
+        isString(plan.planId) &&
+        isString(plan.createdAt) &&
+        isString(plan.updatedAt) &&
+        isNumber(plan.sessionCount) &&
+        typeof plan.passedFeasibility === 'boolean',
+    )
+  )
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   let body: unknown
   try {
@@ -259,7 +371,7 @@ export async function fetchHealth(
 
 export async function generateStudyPlan(
   payload: GenerateStudyPlanPayload,
-): Promise<StudyPlanResponse> {
+): Promise<SavedStudyPlan> {
   const response = await fetch(`${API_BASE_URL}/api/plan/generate`, {
     method: 'POST',
     headers: {
@@ -274,8 +386,75 @@ export async function generateStudyPlan(
   }
 
   const data: unknown = await response.json()
-  if (!isPlanResponse(data)) {
-    throw new Error('The backend returned an unexpected study plan response.')
+  if (!isPersistedPlan(data)) {
+    throw new Error('The backend returned an unexpected saved study plan response.')
   }
   return data
+}
+
+async function readResponse<T>(
+  response: Response,
+  validate: (value: unknown) => value is T,
+  resource: string,
+): Promise<T> {
+  if (!response.ok) throw new Error(await readErrorMessage(response))
+  const data: unknown = await response.json()
+  if (!validate(data)) {
+    throw new Error(`The backend returned an unexpected ${resource} response.`)
+  }
+  return data
+}
+
+export async function updateSessionProgress(
+  planId: string,
+  sessionId: string,
+  status: Exclude<ProgressStatus, 'scheduled'>,
+  actualMinutes?: number,
+): Promise<SavedStudyPlan> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/plan/${encodeURIComponent(planId)}/sessions/${encodeURIComponent(sessionId)}/progress`,
+    {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        status,
+        ...(actualMinutes === undefined ? {} : { actualMinutes }),
+      }),
+    },
+  )
+  return readResponse(response, isPersistedPlan, 'saved study plan')
+}
+
+export async function fetchSavedStudyPlan(
+  planId: string,
+): Promise<SavedStudyPlan> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/plan/${encodeURIComponent(planId)}`,
+    { headers: { Accept: 'application/json' } },
+  )
+  return readResponse(response, isPersistedPlan, 'saved study plan')
+}
+
+export async function replanStudyPlan(planId: string): Promise<SavedStudyPlan> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/plan/${encodeURIComponent(planId)}/replan`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    },
+  )
+  return readResponse(response, isPersistedPlan, 'replanned study plan')
+}
+
+export async function fetchProgressAnalytics(
+  signal?: AbortSignal,
+): Promise<ProgressAnalytics> {
+  const response = await fetch(`${API_BASE_URL}/api/progress/analytics`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  return readResponse(response, isProgressAnalytics, 'progress analytics')
 }

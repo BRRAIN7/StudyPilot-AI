@@ -1,5 +1,8 @@
-import type { ReactNode } from 'react'
-import type { StudyPlanResponse } from './lib/api'
+import { useState, type ReactNode } from 'react'
+import type {
+  ProgressStatus,
+  SavedStudyPlan,
+} from './lib/api'
 
 const agentNames: Record<string, string> = {
   priority_agent: 'Priority Agent',
@@ -63,13 +66,32 @@ function ResultSection({
 export function StudyPlanResults({
   plan,
   onEdit,
+  onProgressUpdate,
+  progressBusySessionId,
+  progressMessage,
+  progressError,
+  onReplan,
+  isReplanning,
 }: {
-  plan: StudyPlanResponse
+  plan: SavedStudyPlan
   onEdit: () => void
+  onProgressUpdate: (
+    sessionId: string,
+    status: Exclude<ProgressStatus, 'scheduled'>,
+    actualMinutes?: number,
+  ) => void
+  progressBusySessionId: string | null
+  progressMessage: string
+  progressError: string
+  onReplan: () => void
+  isReplanning: boolean
 }) {
+  const [actualMinutesBySession, setActualMinutesBySession] = useState<
+    Record<string, string>
+  >({})
   const groupedSessions = new Map<
     string,
-    StudyPlanResponse['schedule']
+    SavedStudyPlan['schedule']
   >()
   for (const session of [...plan.schedule].sort(
     (left, right) =>
@@ -120,12 +142,39 @@ export function StudyPlanResults({
             {plan.revisionCount} {plan.revisionCount === 1 ? 'revision' : 'revisions'}
             {' · '}
             {plan.timezone}
+            {' · '}
+            {plan.replanCount} {plan.replanCount === 1 ? 'replan' : 'replans'}
           </span>
         </div>
-        <button className="secondary-action" type="button" onClick={onEdit}>
-          Back to planner
-        </button>
+        <div className="plan-toolbar-actions">
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={onReplan}
+            disabled={isReplanning || progressBusySessionId !== null}
+          >
+            {isReplanning ? 'Replanning…' : 'Replan remaining schedule'}
+          </button>
+          <button className="secondary-action" type="button" onClick={onEdit}>
+            Back to planner
+          </button>
+        </div>
       </div>
+      {progressMessage && (
+        <p className="progress-notice" role="status">{progressMessage}</p>
+      )}
+      {progressError && (
+        <div className="request-error" role="alert">
+          <strong>Progress update failed.</strong>
+          <p>{progressError}</p>
+        </div>
+      )}
+      {isReplanning && (
+        <p className="request-loading" role="status">
+          <span className="request-spinner" aria-hidden="true" />
+          Rechecking remaining workload, deadlines, and agent feedback…
+        </p>
+      )}
 
       <ResultSection title="Study sessions" count={plan.schedule.length}>
         {groupedSessions.size === 0 ? (
@@ -155,6 +204,90 @@ export function StudyPlanResults({
                       <span className="session-duration">
                         {minutesLabel(session.durationMinutes)}
                       </span>
+                      <div className="session-progress">
+                        <span className={`session-status is-${session.progressStatus}`}>
+                          {session.progressStatus.replaceAll('_', ' ')}
+                        </span>
+                        {session.isCurrent &&
+                          session.progressStatus === 'scheduled' && (
+                            <div className="session-progress-controls">
+                              <label className="actual-time-field">
+                                Actual minutes
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={session.durationMinutes}
+                                  step="1"
+                                  value={actualMinutesBySession[session.sessionId] ?? ''}
+                                  onChange={(event) =>
+                                    setActualMinutesBySession((current) => ({
+                                      ...current,
+                                      [session.sessionId]: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Optional"
+                                  aria-label={`Actual minutes for ${session.topic}`}
+                                  disabled={
+                                    isReplanning ||
+                                    progressBusySessionId !== null
+                                  }
+                                />
+                              </label>
+                              {(
+                                [
+                                  ['completed', 'Complete'],
+                                  ['partially_completed', 'Partial'],
+                                  ['missed', 'Missed'],
+                                ] as const
+                              ).map(([status, label]) => {
+                                const rawMinutes =
+                                  actualMinutesBySession[session.sessionId]
+                                const actualMinutes =
+                                  rawMinutes === undefined || rawMinutes === ''
+                                    ? undefined
+                                    : Number(rawMinutes)
+                                return (
+                                  <button
+                                    className="progress-action"
+                                    key={status}
+                                    type="button"
+                                    disabled={
+                                      isReplanning ||
+                                      progressBusySessionId !== null ||
+                                      (status === 'partially_completed' &&
+                                        actualMinutes !== undefined &&
+                                        actualMinutes >= session.durationMinutes)
+                                    }
+                                    onClick={() =>
+                                      onProgressUpdate(
+                                        session.sessionId,
+                                        status,
+                                        status === 'missed'
+                                          ? undefined
+                                          : actualMinutes,
+                                      )
+                                    }
+                                  >
+                                    {progressBusySessionId === session.sessionId
+                                      ? 'Saving…'
+                                      : label}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        {session.actualMinutes !== null && (
+                          <span className="session-actual-time">
+                            {session.actualMinutes} min recorded
+                          </span>
+                        )}
+                        {session.progressHistory.length > 0 && (
+                          <span className="session-history-count">
+                            {session.progressHistory.length} progress update
+                            {session.progressHistory.length === 1 ? '' : 's'} recorded
+                          </span>
+                        )}
+                      </div>
                     </article>
                   ))}
                 </div>

@@ -44,6 +44,7 @@ class GroqAgentError(RuntimeError):
 
 class PlanGraphState(TypedDict, total=False):
     request: StudyPlanRequest
+    reserved_sessions: list[StudySession]
     as_of: date
     now: datetime
     priorities: list[TopicPriority]
@@ -286,6 +287,7 @@ def build_plan_graph(
             revision_focus_topic_ids=state.get("revision_focus_topic_ids", []),
             as_of=state["as_of"],
             now=state["now"],
+            reserved_sessions=state.get("reserved_sessions", []),
         )
         provider = "deterministic"
         if planner_model is not None:
@@ -314,12 +316,13 @@ def build_plan_graph(
             provider = "groq"
         output = PlannerAgentOutput(
             schedule=create_schedule(
-            agent_input.request,
-            agent_input.priorities,
-            agent_input.as_of,
-            agent_input.now,
-            agent_input.revision_focus_topic_ids,
-            agent_input.revision_feedback,
+                agent_input.request,
+                agent_input.priorities,
+                agent_input.as_of,
+                agent_input.now,
+                agent_input.revision_focus_topic_ids,
+                agent_input.revision_feedback,
+                agent_input.reserved_sessions,
             )
         )
         event = AgentTraceEntry(
@@ -341,12 +344,14 @@ def build_plan_graph(
             priorities=state["priorities"],
             schedule=state["schedule"],
             as_of=state["as_of"],
+            reserved_sessions=state.get("reserved_sessions", []),
         )
         report = check_feasibility(
             agent_input.request,
             agent_input.priorities,
             agent_input.schedule,
             agent_input.as_of,
+            agent_input.reserved_sessions,
         )
         feedback = [
             finding.message
@@ -373,6 +378,7 @@ def build_plan_graph(
             schedule=state["schedule"],
             feasibility=state["feasibility"],
             revision=state.get("revision_count", 0),
+            reserved_sessions=state.get("reserved_sessions", []),
         )
         deterministic = _deterministic_review(agent_input)
         provider = "groq" if reviewer_model is not None else "deterministic_fallback"
@@ -507,6 +513,7 @@ def generate_plan(
     priority_model: PriorityModel | None = None,
     planner_model: PlannerModel | None = None,
     reviewer_model: ReviewerModel | None = None,
+    reserved_sessions: list[StudySession] | None = None,
     now: datetime | None = None,
 ) -> PlanResponse:
     local_datetime = now or local_now()
@@ -531,6 +538,7 @@ def generate_plan(
     ).invoke(
         {
             "request": request,
+            "reserved_sessions": reserved_sessions or [],
             "as_of": local_datetime.date(),
             "now": local_datetime,
             "revision_count": 0,

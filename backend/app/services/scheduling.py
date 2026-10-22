@@ -162,6 +162,7 @@ def create_schedule(
     now: datetime,
     revision_focus_topic_ids: list[str] | None = None,
     revision_feedback: list[str] | None = None,
+    reserved_sessions: list[StudySession] | None = None,
 ) -> list[StudySession]:
     records = _topic_records(request)
     by_topic_id = {record.topic_id: record for record in records}
@@ -196,6 +197,10 @@ def create_schedule(
         end_window - start_window,
     )
     local_time = now.astimezone(ZoneInfo(settings.timezone))
+    reserved_by_date: dict[date, list[StudySession]] = {}
+    for reserved in reserved_sessions or []:
+        if reserved.date >= as_of:
+            reserved_by_date.setdefault(reserved.date, []).append(reserved)
     sessions: list[StudySession] = []
     last_exam = max(subject.exam_date for subject in request.subjects)
     current_date = as_of
@@ -205,7 +210,20 @@ def create_schedule(
             cursor = start_window
             if current_date == as_of:
                 cursor = max(cursor, local_time.hour * 60 + local_time.minute)
-            study_minutes_today = 0
+            reserved_today = reserved_by_date.get(current_date, [])
+            study_minutes_today = sum(
+                session.duration_minutes for session in reserved_today
+            )
+            previous_reserved_ends = [
+                _minute_of_day(session.end_time)
+                for session in reserved_today
+                if _minute_of_day(session.end_time) <= cursor
+            ]
+            if previous_reserved_ends:
+                cursor = max(
+                    cursor,
+                    max(previous_reserved_ends) + request.break_duration_minutes,
+                )
             has_session_today = False
 
             while study_minutes_today < daily_study_cap:
@@ -228,6 +246,34 @@ def create_schedule(
                         time_available,
                         daily_budget,
                     )
+                    next_reserved = next(
+                        (
+                            reserved
+                            for reserved in sorted(
+                                reserved_today, key=lambda item: item.start_time
+                            )
+                            if _minute_of_day(reserved.end_time) > cursor
+                        ),
+                        None,
+                    )
+                    if next_reserved is not None:
+                        reserved_start = _minute_of_day(next_reserved.start_time)
+                        if cursor >= reserved_start:
+                            cursor = _minute_of_day(next_reserved.end_time)
+                            has_session_today = True
+                            made_progress = True
+                            break
+                        duration_before_reserved = (
+                            reserved_start
+                            - cursor
+                            - request.break_duration_minutes
+                        )
+                        if duration_before_reserved <= 0:
+                            cursor = _minute_of_day(next_reserved.end_time)
+                            has_session_today = True
+                            made_progress = True
+                            break
+                        duration = min(duration, duration_before_reserved)
                     if duration <= 0:
                         continue
 
@@ -268,6 +314,7 @@ def check_feasibility(
     priorities: list[TopicPriority],
     sessions: list[StudySession],
     as_of: date,
+    reserved_sessions: list[StudySession] | None = None,
 ) -> FeasibilityReport:
     records = _topic_records(request)
     priority_ranks = {item.topic_id: item.rank for item in priorities}
@@ -381,6 +428,10 @@ def check_feasibility(
 
         scheduled_by_topic[session.topic_id] += session.duration_minutes
         sessions_by_date.setdefault(session.date, []).append(session)
+
+    for session in reserved_sessions or []:
+        if session.date >= as_of:
+            sessions_by_date.setdefault(session.date, []).append(session)
 
     for session_date, daily_sessions in sessions_by_date.items():
         ordered = sorted(daily_sessions, key=lambda item: item.start_time)

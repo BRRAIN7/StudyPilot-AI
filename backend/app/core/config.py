@@ -9,6 +9,7 @@ class Settings:
     app_description: str = "An adaptive academic planning system for students."
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     timezone: str = "Asia/Kolkata"
+    database_url: str = "sqlite:///./studypilot.db"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
 
@@ -26,6 +27,9 @@ def _load_settings() -> Settings:
     )
     return Settings(
         cors_origins=origins,
+        database_url=os.getenv(
+            "STUDYPILOT_DATABASE_URL", "sqlite:///./studypilot.db"
+        ),
         groq_api_key=os.getenv("GROQ_API_KEY") or None,
         groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
     )

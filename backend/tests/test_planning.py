@@ -19,7 +19,11 @@ from app.schemas.plan import (
     StudySession,
     TopicPriority,
 )
-from app.services.scheduling import check_feasibility, prioritize_topics
+from app.services.scheduling import (
+    check_feasibility,
+    create_schedule,
+    prioritize_topics,
+)
 
 client = TestClient(app)
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -192,6 +196,79 @@ def test_feasibility_detects_overlapping_sessions() -> None:
     assert any(
         finding.code == "over_scheduled_topic" for finding in report.findings
     )
+
+
+def test_planner_avoids_completed_session_time_slots() -> None:
+    payload = valid_payload()
+    payload["subjects"][0]["topics"][0]["estimatedHours"] = 3
+    request = parse_request(payload)
+    priorities = prioritize_topics(request, today())
+    completed = StudySession(
+        date=today() + timedelta(days=1),
+        start_time=time(8, 30),
+        end_time=time(9, 15),
+        subject_id="subject-1",
+        subject="Algorithms",
+        topic_id="topic-1",
+        topic="Graph traversal",
+        duration_minutes=45,
+    )
+
+    schedule = create_schedule(
+        request,
+        priorities,
+        today(),
+        fixed_now(),
+        reserved_sessions=[completed],
+    )
+    same_day = [
+        session for session in schedule if session.date == completed.date
+    ]
+
+    assert same_day
+    assert all(
+        session.end_time <= completed.start_time
+        or session.start_time >= completed.end_time
+        for session in same_day
+    )
+    report = check_feasibility(
+        request,
+        priorities,
+        schedule,
+        today(),
+        reserved_sessions=[completed],
+    )
+    assert report.passed
+
+
+def test_planner_keeps_break_after_completed_session() -> None:
+    payload = valid_payload()
+    payload["subjects"][0]["topics"][0]["estimatedHours"] = 3
+    request = parse_request(payload)
+    priorities = prioritize_topics(request, today())
+    completed = StudySession(
+        date=today(),
+        start_time=time(8, 0),
+        end_time=time(8, 45),
+        subject_id="subject-1",
+        subject="Algorithms",
+        topic_id="topic-1",
+        topic="Graph traversal",
+        duration_minutes=45,
+    )
+    now = datetime.combine(today(), time(8, 50), tzinfo=TIMEZONE)
+
+    schedule = create_schedule(
+        request,
+        priorities,
+        today(),
+        now,
+        reserved_sessions=[completed],
+    )
+    same_day = [session for session in schedule if session.date == today()]
+
+    assert same_day
+    assert same_day[0].start_time >= time(8, 55)
 
 
 def test_short_availability_returns_uncovered_work_and_insufficient_time(

@@ -8,19 +8,31 @@ class Settings:
     app_version: str = "0.1.0"
     app_description: str = "An adaptive academic planning system for students."
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
+    timezone: str = "Asia/Kolkata"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
 
 
 def _load_settings() -> Settings:
     configured_origins = os.getenv("STUDYPILOT_CORS_ORIGINS")
-    if not configured_origins:
-        return Settings()
-
-    origins = tuple(
-        origin.strip()
-        for origin in configured_origins.split(",")
-        if origin.strip()
+    origins = (
+        tuple(
+            origin.strip()
+            for origin in configured_origins.split(",")
+            if origin.strip()
+        )
+        if configured_origins
+        else ("http://localhost:5173",)
     )
-    return Settings(cors_origins=origins)
+    return Settings(
+        cors_origins=origins,
+        groq_api_key=os.getenv("GROQ_API_KEY") or None,
+        groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+    )
 
 
-settings = _load_settings()
+def get_settings() -> Settings:
+    return _load_settings()
+
+
+settings = get_settings()

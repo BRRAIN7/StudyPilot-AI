@@ -35,3 +35,14 @@ override it, set `STUDYPILOT_CORS_ORIGINS` to a comma-separated list of origins
 before starting Uvicorn. See `backend/.env.example` for the variable format;
 the application reads environment variables directly and does not load `.env`
 files.
+
+## Study plan generation
+
+`POST /api/plan/generate` accepts the Study Planner form data and returns a
+deterministically scheduled plan, feasibility results, reviewer feedback, and
+the LangGraph execution trace. Scheduling and validation never rely on the
+language model. Without `GROQ_API_KEY`, all agent nodes use deterministic
+behavior, and the reviewer is identified as a deterministic fallback. To enable
+Groq-based prioritization explanations, planner advice, and review, set
+`GROQ_API_KEY` and optionally `GROQ_MODEL` in the environment before starting
+the API.

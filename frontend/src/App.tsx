@@ -1,5 +1,16 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { fetchHealth } from './lib/api'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
+import {
+  fetchHealth,
+  generateStudyPlan,
+  type StudyPlanResponse,
+} from './lib/api'
+import { StudyPlanResults } from './StudyPlanResults'
 import './App.css'
 
 const pages = [
@@ -226,14 +237,12 @@ function SectionHeading({
 function StudyPlannerPage() {
   const [form, setForm] = useState<StudyPlanForm>(() => initialForm())
   const [hasSubmitted, setHasSubmitted] = useState(false)
-  const [showMockMessage, setShowMockMessage] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [requestError, setRequestError] = useState('')
+  const [planResult, setPlanResult] = useState<StudyPlanResponse | null>(null)
+  const [showResults, setShowResults] = useState(false)
+  const requestInProgress = useRef(false)
   const errors = hasSubmitted ? validateForm(form) : {}
-
-  useEffect(() => {
-    if (!showMockMessage) return
-    const timeoutId = window.setTimeout(() => setShowMockMessage(false), 6000)
-    return () => window.clearTimeout(timeoutId)
-  }, [showMockMessage])
 
   function updateSubject(
     subjectId: string,
@@ -245,7 +254,7 @@ function StudyPlannerPage() {
         subject.id === subjectId ? update(subject) : subject,
       ),
     }))
-    setShowMockMessage(false)
+    setRequestError('')
   }
 
   function updateTopic(
@@ -266,16 +275,75 @@ function StudyPlannerPage() {
     value: StudyPlanForm[Key],
   ) {
     setForm((current) => ({ ...current, [key]: value }))
-    setShowMockMessage(false)
+    setRequestError('')
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (requestInProgress.current) return
     setHasSubmitted(true)
-    setShowMockMessage(false)
-    if (Object.keys(validateForm(form)).length === 0) {
-      setShowMockMessage(true)
+    setRequestError('')
+    const validationErrors = validateForm(form)
+    if (Object.keys(validationErrors).length > 0) return
+
+    const payload = {
+      subjects: form.subjects.map((subject) => ({
+        id: subject.id,
+        name: subject.name.trim(),
+        examDate: subject.examDate,
+        priority: subject.priority,
+        topics: subject.topics.map((topic) => ({
+          id: topic.id,
+          name: topic.name.trim(),
+          difficulty: topic.difficulty,
+          preparationLevel: topic.preparationLevel,
+          estimatedHours: Number(topic.estimatedHours),
+        })),
+      })),
+      availableDays: form.availableDays,
+      hoursPerDay: Number(form.hoursPerDay),
+      preferredStartTime: form.preferredStartTime,
+      preferredEndTime: form.preferredEndTime,
+      sessionDurationMinutes: Number(form.sessionDurationMinutes),
+      breakDurationMinutes: Number(form.breakDurationMinutes),
     }
+
+    requestInProgress.current = true
+    setIsSubmitting(true)
+    void generateStudyPlan(payload)
+      .then((result) => {
+        setPlanResult(result)
+        setShowResults(true)
+      })
+      .catch((error: unknown) => {
+        setRequestError(
+          error instanceof Error
+            ? error.message
+            : 'Unable to generate a study plan. Please try again.',
+        )
+      })
+      .finally(() => {
+        requestInProgress.current = false
+        setIsSubmitting(false)
+      })
+  }
+
+  if (showResults && planResult) {
+    return (
+      <>
+        <div className="page-heading planner-page-heading">
+          <p className="page-kicker">YOUR ADAPTIVE STUDY PLAN</p>
+          <h1>Study Planner</h1>
+          <p className="page-description">
+            Review the schedule, feasibility results, and agent decisions below.
+          </p>
+        </div>
+        <StudyPlanResults
+          plan={planResult}
+          onEdit={() => setShowResults(false)}
+        />
+      </>
+    )
   }
 
   return (
@@ -289,7 +357,13 @@ function StudyPlannerPage() {
         </p>
       </div>
 
-      <form className="planner-form" onSubmit={handleSubmit} noValidate>
+      <form
+        className="planner-form"
+        onSubmit={handleSubmit}
+        noValidate
+        aria-busy={isSubmitting}
+      >
+        <fieldset className="planner-fields" disabled={isSubmitting}>
         <section className="planner-section" aria-labelledby="planner-section-title-01">
           <SectionHeading
             number="01"
@@ -314,7 +388,7 @@ function StudyPlannerPage() {
                           (item) => item.id !== subject.id,
                         ),
                       }))
-                      setShowMockMessage(false)
+                      setRequestError('')
                     }}
                     aria-label={`Remove subject ${subject.name || subjectIndex + 1}`}
                   >
@@ -726,18 +800,31 @@ function StudyPlannerPage() {
             </div>
           </div>
         </section>
+        </fieldset>
 
         <div className="planner-actions">
-          <p>Your details stay on this page for now. Plan generation will be connected later.</p>
-          <button className="generate-button" type="submit">
-            Generate Study Plan
-            <span aria-hidden="true">→</span>
+          <p>
+            {isSubmitting
+              ? 'Your agents are preparing and reviewing the plan. This may take a moment.'
+              : 'Your plan is generated from the details entered above.'}
+          </p>
+          <button className="generate-button" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Generating plan…' : 'Generate Study Plan'}
+            {!isSubmitting && <span aria-hidden="true">→</span>}
           </button>
         </div>
-        {showMockMessage && (
-          <p className="planner-status-message" role="status">
-            Your study details are ready. Plan generation will be connected in a later phase.
+        {isSubmitting && (
+          <p className="request-loading" role="status">
+            <span className="request-spinner" aria-hidden="true" />
+            Contacting the planning agents…
           </p>
+        )}
+        {requestError && (
+          <div className="request-error" role="alert">
+            <strong>We couldn’t generate your plan.</strong>
+            <p>{requestError}</p>
+            <span>Check the backend connection and try again. Your inputs are still here.</span>
+          </div>
         )}
       </form>
     </>

@@ -69,6 +69,15 @@ export type TopicCoverage = {
   remainingMinutes: number
 }
 
+export type AgentTraceEntry = {
+  node: string
+  decision: string
+  revision: number
+  feedback: string[]
+  routedTo: string | null
+  provider: string | null
+}
+
 export type StudyPlanResponse = {
   timezone: string
   schedule: PlanSession[]
@@ -88,14 +97,19 @@ export type StudyPlanResponse = {
   passedFeasibility: boolean
   warnings: string[]
   agentMode: 'groq' | 'deterministic_fallback'
-  executionTrace: {
-    node: string
-    decision: string
-    revision: number
-    feedback: string[]
-    routedTo: string | null
-    provider: string | null
-  }[]
+  executionTrace: AgentTraceEntry[]
+}
+
+export type AgentActivityPlan = {
+  planId: string
+  createdAt: string
+  updatedAt: string
+  agentMode: 'groq' | 'deterministic_fallback'
+  executionTrace: AgentTraceEntry[]
+}
+
+export type AgentActivityResponse = {
+  plans: AgentActivityPlan[]
 }
 
 export type ProgressStatus =
@@ -140,6 +154,65 @@ export type ProgressAnalytics = {
     sessionCount: number
     passedFeasibility: boolean
   }[]
+}
+
+export type OverviewSession = {
+  planId: string
+  sessionId: string
+  date: string
+  startTime: string
+  endTime: string
+  subject: string
+  topic: string
+  topicId: string
+  durationMinutes: number
+  progressStatus: ProgressStatus
+  actualMinutes: number | null
+  isCurrent: boolean
+}
+
+export type OverviewTopic = {
+  topicId: string
+  topicName: string
+  difficulty: 'Easy' | 'Medium' | 'Hard' | null
+  preparationLevel:
+    | 'Not Started'
+    | 'Beginner'
+    | 'Intermediate'
+    | 'Well Prepared'
+    | null
+  estimatedHours: number | null
+  sourcePlanId: string
+  sessions: OverviewSession[]
+}
+
+export type OverviewSubject = {
+  subjectName: string
+  examDate: string | null
+  priority: 'Low' | 'Medium' | 'High' | null
+  sourcePlanId: string
+  topics: OverviewTopic[]
+}
+
+export type AcademicOverview = {
+  totalPlans: number
+  totalScheduledSessions: number
+  completedSessions: number
+  partiallyCompletedSessions: number
+  missedSessions: number
+  trackedSessions: number
+  completionRatePercent: number
+  recordedStudyMinutes: number
+  recentPlans: {
+    planId: string
+    createdAt: string
+    updatedAt: string
+    sessionCount: number
+    passedFeasibility: boolean
+  }[]
+  upcomingSessions: OverviewSession[]
+  recentAgentActivity: (AgentTraceEntry & { planId: string })[]
+  subjects: OverviewSubject[]
 }
 
 const API_BASE_URL =
@@ -323,6 +396,125 @@ function isProgressAnalytics(value: unknown): value is ProgressAnalytics {
   )
 }
 
+function isAgentActivity(value: unknown): value is AgentActivityResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.plans) &&
+    value.plans.every(
+      (plan) =>
+        isRecord(plan) &&
+        isString(plan.planId) &&
+        isString(plan.createdAt) &&
+        isString(plan.updatedAt) &&
+        (plan.agentMode === 'groq' ||
+          plan.agentMode === 'deterministic_fallback') &&
+        Array.isArray(plan.executionTrace) &&
+        plan.executionTrace.every(
+          (entry) =>
+            isRecord(entry) &&
+            isString(entry.node) &&
+            isString(entry.decision) &&
+            isNumber(entry.revision) &&
+            isStringArray(entry.feedback) &&
+            (entry.routedTo === null || isString(entry.routedTo)) &&
+            (entry.provider === null || isString(entry.provider)),
+        ),
+    )
+  )
+}
+
+function isOverviewSession(value: unknown): value is OverviewSession {
+  return (
+    isRecord(value) &&
+    isString(value.planId) &&
+    isString(value.sessionId) &&
+    isString(value.date) &&
+    isString(value.startTime) &&
+    isString(value.endTime) &&
+    isString(value.subject) &&
+    isString(value.topic) &&
+    isString(value.topicId) &&
+    isNumber(value.durationMinutes) &&
+    (value.progressStatus === 'scheduled' ||
+      value.progressStatus === 'completed' ||
+      value.progressStatus === 'partially_completed' ||
+      value.progressStatus === 'missed') &&
+    isNullableNumber(value.actualMinutes) &&
+    typeof value.isCurrent === 'boolean'
+  )
+}
+
+function isAcademicOverview(value: unknown): value is AcademicOverview {
+  return (
+    isRecord(value) &&
+    isNumber(value.totalPlans) &&
+    isNumber(value.totalScheduledSessions) &&
+    isNumber(value.completedSessions) &&
+    isNumber(value.partiallyCompletedSessions) &&
+    isNumber(value.missedSessions) &&
+    isNumber(value.trackedSessions) &&
+    isNumber(value.completionRatePercent) &&
+    isNumber(value.recordedStudyMinutes) &&
+    Array.isArray(value.recentPlans) &&
+    value.recentPlans.every(
+      (plan) =>
+        isRecord(plan) &&
+        isString(plan.planId) &&
+        isString(plan.createdAt) &&
+        isString(plan.updatedAt) &&
+        isNumber(plan.sessionCount) &&
+        typeof plan.passedFeasibility === 'boolean',
+    ) &&
+    Array.isArray(value.upcomingSessions) &&
+    value.upcomingSessions.every(isOverviewSession) &&
+    Array.isArray(value.subjects) &&
+    value.subjects.every(
+      (subject) =>
+        isRecord(subject) &&
+        isString(subject.subjectName) &&
+        (subject.examDate === null || isString(subject.examDate)) &&
+        (subject.priority === null ||
+          subject.priority === 'Low' ||
+          subject.priority === 'Medium' ||
+          subject.priority === 'High') &&
+        isString(subject.sourcePlanId) &&
+        Array.isArray(subject.topics) &&
+        subject.topics.every(
+          (topic) =>
+            isRecord(topic) &&
+            isString(topic.topicId) &&
+            isString(topic.topicName) &&
+            (topic.difficulty === null ||
+              topic.difficulty === 'Easy' ||
+              topic.difficulty === 'Medium' ||
+              topic.difficulty === 'Hard') &&
+            (topic.preparationLevel === null ||
+              topic.preparationLevel === 'Not Started' ||
+              topic.preparationLevel === 'Beginner' ||
+              topic.preparationLevel === 'Intermediate' ||
+              topic.preparationLevel === 'Well Prepared') &&
+            (topic.estimatedHours === null ||
+              isNumber(topic.estimatedHours)) &&
+            isString(topic.sourcePlanId) &&
+            Array.isArray(topic.sessions) &&
+            topic.sessions.every(isOverviewSession),
+        ),
+    ) &&
+    Array.isArray(value.recentAgentActivity) &&
+    value.recentAgentActivity.every(
+      (entry) =>
+        isRecord(entry) &&
+        isString(entry.planId) &&
+        isString(entry.node) &&
+        isString(entry.decision) &&
+        isNumber(entry.revision) &&
+        isStringArray(entry.feedback) &&
+        (entry.routedTo === null || isString(entry.routedTo)) &&
+        (entry.provider === null || isString(entry.provider)),
+    )
+  )
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   let body: unknown
   try {
@@ -457,4 +649,24 @@ export async function fetchProgressAnalytics(
     signal,
   })
   return readResponse(response, isProgressAnalytics, 'progress analytics')
+}
+
+export async function fetchAgentActivity(
+  signal?: AbortSignal,
+): Promise<AgentActivityResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/activity`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  return readResponse(response, isAgentActivity, 'agent activity')
+}
+
+export async function fetchAcademicOverview(
+  signal?: AbortSignal,
+): Promise<AcademicOverview> {
+  const response = await fetch(`${API_BASE_URL}/api/overview`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  return readResponse(response, isAcademicOverview, 'academic overview')
 }

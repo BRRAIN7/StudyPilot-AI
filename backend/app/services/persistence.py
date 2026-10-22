@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.models.persistence import PlanRecord, ProgressUpdate, SessionRecord
 from app.schemas.plan import (
     PersistedStudySession,
+    AgentActivityPlan,
+    AgentActivityResponse,
     PlanResponse,
     PlanSummary,
     ProgressAnalyticsResponse,
@@ -223,6 +225,11 @@ def persist_replan(
     existing_trace = list(record.result_data.get("execution_trace", []))
     result_data = result.model_dump(mode="json")
     result_data["execution_trace"] = [*existing_trace, *result_data["execution_trace"]]
+    result_data["agent_mode"] = (
+        "groq"
+        if any(entry.get("provider") == "groq" for entry in result_data["execution_trace"])
+        else "deterministic_fallback"
+    )
     record.revision_count += result.revision_count
     result_data["revision_count"] = record.revision_count
     record.result_data = result_data
@@ -317,3 +324,22 @@ def get_progress_analytics(database: Session) -> ProgressAnalyticsResponse:
             for plan in plans[:10]
         ],
     )
+
+
+def get_agent_activity(database: Session) -> AgentActivityResponse:
+    records = database.scalars(
+        select(PlanRecord).order_by(PlanRecord.created_at.desc()).limit(50)
+    ).all()
+    plans = []
+    for record in records:
+        result = PlanResponse.model_validate(record.result_data)
+        plans.append(
+            AgentActivityPlan(
+                plan_id=record.id,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                agent_mode=result.agent_mode,
+                execution_trace=result.execution_trace,
+            )
+        )
+    return AgentActivityResponse(plans=plans)

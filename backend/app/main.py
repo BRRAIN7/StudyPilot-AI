@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.health import router as health_router
+from app.api.routes.agents import router as agents_router
+from app.api.routes.overview import router as overview_router
 from app.api.routes.plans import router as plans_router
 from app.api.routes.progress import router as progress_router
 from app.core.config import settings
@@ -33,6 +35,8 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(plans_router)
 app.include_router(progress_router)
+app.include_router(agents_router)
+app.include_router(overview_router)
 
 
 @app.get("/")

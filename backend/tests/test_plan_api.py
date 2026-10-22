@@ -249,3 +249,96 @@ def test_progress_analytics_reflect_saved_outcomes(
     assert metrics["completedSessions"] == 1
     assert metrics["recordedStudyMinutes"] == 25
     assert metrics["completionRatePercent"] == 100
+
+
+def test_agent_activity_returns_only_saved_plan_execution_traces(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(graph_module, "create_groq_agents", lambda: None)
+    saved = client.post("/api/plan/generate", json=payload()).json()
+
+    response = client.get("/api/agents/activity")
+
+    assert response.status_code == 200
+    activity = response.json()["plans"]
+    assert len(activity) == 1
+    assert activity[0]["planId"] == saved["planId"]
+    assert activity[0]["executionTrace"] == saved["executionTrace"]
+    assert all(
+        entry["provider"] is not None
+        for entry in activity[0]["executionTrace"]
+    )
+
+
+def test_academic_overview_returns_empty_workspace(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/overview")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "totalPlans": 0,
+        "totalScheduledSessions": 0,
+        "completedSessions": 0,
+        "partiallyCompletedSessions": 0,
+        "missedSessions": 0,
+        "trackedSessions": 0,
+        "completionRatePercent": 0,
+        "recordedStudyMinutes": 0,
+        "recentPlans": [],
+        "upcomingSessions": [],
+        "recentAgentActivity": [],
+        "subjects": [],
+    }
+
+
+def test_academic_overview_aggregates_multiple_plans_and_progress(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(graph_module, "create_groq_agents", lambda: None)
+    saved_plans = [
+        client.post("/api/plan/generate", json=payload()).json()
+        for _ in range(4)
+    ]
+    statuses = [
+        ("completed", {"actualMinutes": 30}),
+        ("partially_completed", {"actualMinutes": 15}),
+        ("missed", {}),
+    ]
+    for saved, (status, extra) in zip(saved_plans, statuses):
+        session_id = saved["schedule"][0]["sessionId"]
+        response = client.patch(
+            f"/api/plan/{saved['planId']}/sessions/{session_id}/progress",
+            json={"status": status, **extra},
+        )
+        assert response.status_code == 200
+
+    response = client.get("/api/overview")
+
+    assert response.status_code == 200
+    overview = response.json()
+    assert overview["totalPlans"] == 4
+    assert overview["totalScheduledSessions"] == 4
+    assert overview["completedSessions"] == 1
+    assert overview["partiallyCompletedSessions"] == 1
+    assert overview["missedSessions"] == 1
+    assert overview["trackedSessions"] == 3
+    assert overview["completionRatePercent"] == 33.3
+    assert overview["recordedStudyMinutes"] == 45
+    assert len(overview["recentPlans"]) == 4
+    assert len(overview["recentAgentActivity"]) > 0
+    assert all(
+        item["planId"] in {saved["planId"] for saved in saved_plans}
+        for item in overview["recentAgentActivity"]
+    )
+    assert len(overview["subjects"]) == 1
+    subject = overview["subjects"][0]
+    assert subject["subjectName"] == "Biology"
+    assert len(subject["topics"]) == 1
+    topic = subject["topics"][0]
+    assert topic["topicName"] == "Cell structure"
+    assert len(topic["sessions"]) == 4
+    assert sum(
+        session["progressStatus"] == "completed"
+        for session in topic["sessions"]
+    ) == 1

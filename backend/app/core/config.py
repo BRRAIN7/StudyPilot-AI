@@ -1,5 +1,10 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 @dataclass(frozen=True)
@@ -11,7 +16,8 @@ class Settings:
     timezone: str = "Asia/Kolkata"
     database_url: str = "sqlite:///./studypilot.db"
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "qwen/qwen3.8-27b"
+    groq_timeout_seconds: float = 20
 
 
 def _load_settings() -> Settings:
@@ -32,6 +38,7 @@ def _load_settings() -> Settings:
         ),
         groq_api_key=os.getenv("GROQ_API_KEY") or None,
         groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_timeout_seconds=float(os.getenv("GROQ_TIMEOUT_SECONDS", "20")),
     )
 
 

@@ -392,6 +392,11 @@ def test_execution_trace_records_each_agent_and_fallback_mode(
     assert next(
         entry for entry in result.execution_trace if entry.node == "reviewer_agent"
     ).provider == "deterministic_fallback"
+    assert all(
+        next(entry for entry in result.execution_trace if entry.node == node).provider
+        == "deterministic_fallback"
+        for node in ("priority_agent", "planner_agent", "reviewer_agent")
+    )
 
 
 def test_reviewer_model_is_called_with_structured_input_and_its_rejection_routes(
@@ -490,3 +495,190 @@ def test_priority_planner_and_reviewer_models_are_mockable_and_traced() -> None:
         entry for entry in result.execution_trace if entry.node == "planner_agent"
     )
     assert planner_event.feedback == ["Focus on graph traversal first."]
+
+
+def test_installed_groq_adapter_uses_structured_outputs_and_traces_actual_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import langchain_groq
+    from types import SimpleNamespace
+
+    calls: list[type] = []
+
+    class FakeStructuredModel:
+        def __init__(self, output_type: type) -> None:
+            self.output_type = output_type
+
+        def invoke(self, _messages):
+            calls.append(self.output_type)
+            if self.output_type is PriorityExplanationOutput:
+                return {
+                    "explanations": [
+                        {
+                            "topic_id": "topic-1",
+                            "explanation": "Mocked grounded explanation.",
+                        }
+                    ]
+                }
+            if self.output_type is PlannerAdviceOutput:
+                return {
+                    "focus_topic_ids": ["topic-1"],
+                    "rationale": "Focus on the known high-priority topic.",
+                }
+            return {
+                "approved": True,
+                "rationale": "The schedule is balanced.",
+                "feedback": [],
+                "warnings": [],
+            }
+
+    class FakeChatGroq:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["model"] == "test-model"
+            assert kwargs["timeout"] == 20
+            assert kwargs["max_retries"] == 1
+
+        def with_structured_output(self, output_type: type):
+            return FakeStructuredModel(output_type)
+
+    monkeypatch.setattr(
+        graph_module,
+        "settings",
+        SimpleNamespace(
+            groq_api_key="mock-key",
+            groq_model="test-model",
+            groq_timeout_seconds=20,
+            timezone="Asia/Kolkata",
+        ),
+    )
+    monkeypatch.setattr(langchain_groq, "ChatGroq", FakeChatGroq)
+    agents = graph_module.create_groq_agents()
+    assert agents is not None
+    result = graph_module.generate_plan(parse_request(), now=fixed_now())
+
+    assert set(calls) == {
+        PriorityExplanationOutput,
+        PlannerAdviceOutput,
+        ReviewerDecision,
+    }
+    assert result.agent_mode == "groq"
+    assert all(
+        next(entry for entry in result.execution_trace if entry.node == node).provider
+        == "groq"
+        for node in ("priority_agent", "planner_agent", "reviewer_agent")
+    )
+    assert next(
+        entry
+        for entry in result.execution_trace
+        if entry.node == "feasibility_agent"
+    ).provider == "deterministic"
+
+
+@pytest.mark.parametrize("failure", ["malformed", "api_error"])
+def test_groq_failures_fall_back_and_are_not_reported_as_groq(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import langchain_groq
+    from types import SimpleNamespace
+
+    class FakeStructuredModel:
+        def __init__(self, output_type: type) -> None:
+            self.output_type = output_type
+
+        def invoke(self, _messages):
+            if failure == "api_error":
+                raise RuntimeError("mock provider error containing a secret")
+            return {"unexpected_field": "malformed"}
+
+    class FakeChatGroq:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def with_structured_output(self, output_type: type):
+            return FakeStructuredModel(output_type)
+
+    monkeypatch.setattr(
+        graph_module,
+        "settings",
+        SimpleNamespace(
+            groq_api_key="mock-key",
+            groq_model="test-model",
+            groq_timeout_seconds=20,
+            timezone="Asia/Kolkata",
+        ),
+    )
+    monkeypatch.setattr(langchain_groq, "ChatGroq", FakeChatGroq)
+    result = graph_module.generate_plan(parse_request(), now=fixed_now())
+
+    for node in ("priority_agent", "planner_agent", "reviewer_agent"):
+        event = next(entry for entry in result.execution_trace if entry.node == node)
+        assert event.provider == "deterministic_fallback"
+        assert "failed" in " ".join(event.feedback).lower()
+    assert result.agent_mode == "deterministic_fallback"
+    assert "mock provider error" not in result.model_dump_json()
+    assert "mock-key" not in result.model_dump_json()
+
+
+def test_groq_initialization_failure_uses_deterministic_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import langchain_groq
+    from types import SimpleNamespace
+
+    class FailingChatGroq:
+        def __init__(self, **_kwargs) -> None:
+            raise RuntimeError("mock initialization failure")
+
+    monkeypatch.setattr(
+        graph_module,
+        "settings",
+        SimpleNamespace(
+            groq_api_key="mock-key",
+            groq_model="test-model",
+            groq_timeout_seconds=20,
+            timezone="Asia/Kolkata",
+        ),
+    )
+    monkeypatch.setattr(langchain_groq, "ChatGroq", FailingChatGroq)
+
+    result = graph_module.generate_plan(parse_request(), now=fixed_now())
+
+    assert result.agent_mode == "deterministic_fallback"
+    assert all(
+        entry.provider == "deterministic_fallback"
+        for entry in result.execution_trace
+        if entry.node in {"priority_agent", "planner_agent", "reviewer_agent"}
+    )
+
+
+def test_partial_groq_success_reports_per_agent_provider_and_overall_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_input):
+        raise RuntimeError("mock provider error")
+
+    result = graph_module.generate_plan(
+        parse_request(),
+        priority_model=lambda _input, _priorities: PriorityExplanationOutput(
+            explanations=[
+                PriorityExplanation(
+                    topic_id="topic-1", explanation="Successful mocked explanation."
+                )
+            ]
+        ),
+        planner_model=fail,
+        reviewer_model=fail,
+        now=fixed_now(),
+    )
+
+    providers = {
+        entry.node: entry.provider
+        for entry in result.execution_trace
+        if entry.node in {"priority_agent", "planner_agent", "reviewer_agent"}
+    }
+    assert providers == {
+        "priority_agent": "groq",
+        "planner_agent": "deterministic_fallback",
+        "reviewer_agent": "deterministic_fallback",
+    }
+    assert result.agent_mode == "groq"

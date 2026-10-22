@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  fetchHealth,
   fetchSavedStudyPlan,
   generateStudyPlan,
   replanStudyPlan,
@@ -16,6 +15,9 @@ import {
   type SavedStudyPlan,
 } from './lib/api'
 import { ProgressAnalyticsPage } from './ProgressAnalytics'
+import { AgentActivityPage } from './AgentActivity'
+import { DashboardPage } from './Dashboard'
+import { SubjectsTasksPage } from './SubjectsTasks'
 import { StudyPlanResults } from './StudyPlanResults'
 import './App.css'
 
@@ -930,85 +932,6 @@ function StudyPlannerPage({
   )
 }
 
-function PlaceholderPage({
-  page,
-}: {
-  page: Exclude<Page, 'Study Planner' | 'Progress Analytics'>
-}) {
-  return (
-    <>
-      <div className="page-heading">
-        <p className="page-kicker">YOUR ACADEMIC WORKSPACE</p>
-        <h1>{page}</h1>
-        <p className="page-description">
-          Your study space is ready. This page will take shape as we build
-          StudyPilot AI, one step at a time.
-        </p>
-      </div>
-      <section className="placeholder-card" aria-labelledby="placeholder-title">
-        <div className="placeholder-mark" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-        <p className="placeholder-label">COMING INTO FOCUS</p>
-        <h2 id="placeholder-title">{page} is on its way</h2>
-        <p>
-          The shared application shell is in place. Page tools and
-          information will be added in the next development phases.
-        </p>
-        {page === 'Dashboard' && <BackendConnectionStatus />}
-      </section>
-    </>
-  )
-}
-
-type ConnectionStatus =
-  | { state: 'loading' }
-  | { state: 'connected' }
-  | { state: 'error'; message: string }
-
-function BackendConnectionStatus() {
-  const [status, setStatus] = useState<ConnectionStatus>({ state: 'loading' })
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    fetchHealth(controller.signal)
-      .then(() => setStatus({ state: 'connected' }))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return
-        setStatus({
-          state: 'error',
-          message:
-            error instanceof Error
-              ? error.message
-              : 'Unable to connect to the backend.',
-        })
-      })
-
-    return () => controller.abort()
-  }, [])
-
-  const label =
-    status.state === 'loading'
-      ? 'Checking backend connection…'
-      : status.state === 'connected'
-        ? 'Backend connected'
-        : `Backend unavailable: ${status.message}`
-
-  return (
-    <div
-      className={`backend-status is-${status.state}`}
-      role={status.state === 'error' ? 'alert' : 'status'}
-      aria-live="polite"
-    >
-      <span className="backend-status-dot" aria-hidden="true" />
-      <span>{label}</span>
-    </div>
-  )
-}
-
 function App() {
   const [activePage, setActivePage] = useState<Page>('Study Planner')
   const [planToLoadId, setPlanToLoadId] = useState<string | null>(null)
@@ -1066,6 +989,14 @@ function App() {
         </header>
 
         <main className="page-content">
+          {activePage === 'Dashboard' && (
+            <DashboardPage
+              onCreatePlan={() => setActivePage('Study Planner')}
+              onOpenPlan={openSavedPlan}
+              onOpenAnalytics={() => setActivePage('Progress Analytics')}
+              onOpenActivity={() => setActivePage('Agent Activity')}
+            />
+          )}
           <div hidden={activePage !== 'Study Planner'}>
             <StudyPlannerPage
               planToLoadId={planToLoadId}
@@ -1075,10 +1006,13 @@ function App() {
           {activePage === 'Progress Analytics' && (
             <ProgressAnalyticsPage onOpenPlan={openSavedPlan} />
           )}
-          {activePage !== 'Study Planner' &&
-            activePage !== 'Progress Analytics' && (
-              <PlaceholderPage page={activePage} />
-            )}
+          {activePage === 'Agent Activity' && <AgentActivityPage />}
+          {activePage === 'Subjects & Tasks' && (
+            <SubjectsTasksPage
+              onCreatePlan={() => setActivePage('Study Planner')}
+              onOpenPlan={openSavedPlan}
+            />
+          )}
         </main>
       </div>
     </div>

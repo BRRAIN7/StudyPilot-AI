@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import date, datetime, time
+import logging
 from typing import TypedDict
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,7 @@ from app.services.scheduling import (
 )
 
 MAX_REVISIONS = 2
+LOGGER = logging.getLogger(__name__)
 ReviewerModel = Callable[[ReviewerAgentInput], ReviewerDecision]
 PriorityModel = Callable[
     [PriorityAgentInput, list[TopicPriority]], PriorityExplanationOutput
@@ -69,18 +71,21 @@ def create_groq_agents() -> tuple[PriorityModel, PlannerModel, ReviewerModel] | 
 
         def model_for(output_model: type):
             return ChatGroq(
-                model=settings.groq_model,
+                model="qwen/qwen3.8-27b",
                 api_key=settings.groq_api_key,
                 temperature=0,
+                timeout=settings.groq_timeout_seconds,
+                max_retries=1,
             ).with_structured_output(output_model)
 
         priority_model = model_for(PriorityExplanationOutput)
         planner_model = model_for(PlannerAdviceOutput)
         reviewer_model = model_for(ReviewerDecision)
-    except Exception as error:
-        raise GroqAgentError(
-            "The configured Groq provider could not be initialized."
-        ) from error
+    except Exception:
+        LOGGER.warning(
+            "Groq agents could not be initialized; deterministic fallback is active."
+        )
+        return None
 
     def invoke_structured(
         model,
@@ -95,15 +100,20 @@ def create_groq_agents() -> tuple[PriorityModel, PlannerModel, ReviewerModel] | 
                     ("human", payload),
                 ]
             )
-        except Exception as error:
+        except Exception:
             raise GroqAgentError(
                 "A configured Groq agent could not complete its request."
-            ) from error
-        if not isinstance(result, output_type):
-            raise GroqAgentError(
-                "A configured Groq agent returned an invalid structured response."
+            ) from None
+        try:
+            return (
+                result
+                if isinstance(result, output_type)
+                else output_type.model_validate(result)
             )
-        return result
+        except Exception:
+            raise GroqAgentError(
+                "A configured Groq agent returned malformed structured output."
+            ) from None
 
     def explain_priorities(
         agent_input: PriorityAgentInput,
@@ -246,33 +256,60 @@ def build_plan_graph(
         output = PriorityAgentOutput(
             priorities=prioritize_topics(agent_input.request, agent_input.as_of)
         )
-        provider = "deterministic"
+        provider = "deterministic_fallback"
+        feedback: list[str] = []
         if priority_model is not None:
-            explanations = priority_model(agent_input, output.priorities)
-            known_topics = {item.topic_id for item in output.priorities}
-            explanation_by_id = {
-                item.topic_id: item.explanation
-                for item in explanations.explanations
-                if item.topic_id in known_topics
-            }
-            output = PriorityAgentOutput(
-                priorities=[
-                    item.model_copy(
-                        update={
-                            "explanation": explanation_by_id.get(
-                                item.topic_id, item.explanation
-                            )
-                        }
-                    )
-                    for item in output.priorities
+            try:
+                explanations = priority_model(agent_input, output.priorities)
+                known_topics = {item.topic_id for item in output.priorities}
+                returned_topic_ids = [
+                    item.topic_id for item in explanations.explanations
                 ]
+                if (
+                    len(returned_topic_ids) != len(set(returned_topic_ids))
+                    or set(returned_topic_ids) != known_topics
+                ):
+                    raise GroqAgentError(
+                        "A configured Groq agent returned incomplete priority explanations."
+                    )
+                explanation_by_id = {
+                    item.topic_id: item.explanation
+                    for item in explanations.explanations
+                    if item.topic_id in known_topics
+                }
+                output = PriorityAgentOutput(
+                    priorities=[
+                        item.model_copy(
+                            update={
+                                "explanation": explanation_by_id.get(
+                                    item.topic_id, item.explanation
+                                )
+                            }
+                        )
+                        for item in output.priorities
+                    ]
+                )
+                provider = "groq"
+            except Exception:
+                feedback.append(
+                    "Groq prioritization explanation failed; deterministic explanations were retained."
+                )
+                LOGGER.warning(
+                    "Priority agent Groq call failed; deterministic fallback used."
+                )
+        else:
+            feedback.append(
+                "Groq is not configured; deterministic priority explanations were used."
             )
-            provider = "groq"
         event = AgentTraceEntry(
             node="priority_agent",
-            decision=f"ranked {len(output.priorities)} topics",
+            decision=(
+                f"ranked {len(output.priorities)} topics"
+                if provider == "groq"
+                else f"ranked {len(output.priorities)} topics using deterministic fallback"
+            ),
             revision=state.get("revision_count", 0),
-            feedback=[],
+            feedback=feedback,
             routed_to="planner_agent",
             provider=provider,
         )
@@ -289,31 +326,42 @@ def build_plan_graph(
             now=state["now"],
             reserved_sessions=state.get("reserved_sessions", []),
         )
-        provider = "deterministic"
+        provider = "deterministic_fallback"
+        planner_feedback = list(agent_input.revision_feedback)
         if planner_model is not None:
-            advice = planner_model(agent_input)
-            valid_topic_ids = {item.topic_id for item in agent_input.priorities}
-            agent_input = agent_input.model_copy(
-                update={
-                    "revision_focus_topic_ids": list(
-                        dict.fromkeys(
-                            [
-                                *agent_input.revision_focus_topic_ids,
-                                *(
-                                    topic_id
-                                    for topic_id in advice.focus_topic_ids
-                                    if topic_id in valid_topic_ids
-                                ),
-                            ]
-                        )
-                    ),
-                    "revision_feedback": [
-                        *agent_input.revision_feedback,
-                        advice.rationale,
-                    ],
-                }
+            try:
+                advice = planner_model(agent_input)
+                valid_topic_ids = {item.topic_id for item in agent_input.priorities}
+                planner_feedback.append(advice.rationale)
+                agent_input = agent_input.model_copy(
+                    update={
+                        "revision_focus_topic_ids": list(
+                            dict.fromkeys(
+                                [
+                                    *agent_input.revision_focus_topic_ids,
+                                    *(
+                                        topic_id
+                                        for topic_id in advice.focus_topic_ids
+                                        if topic_id in valid_topic_ids
+                                    ),
+                                ]
+                            )
+                        ),
+                        "revision_feedback": planner_feedback,
+                    }
+                )
+                provider = "groq"
+            except Exception:
+                planner_feedback.append(
+                    "Groq planner advice failed; deterministic scheduling used."
+                )
+                LOGGER.warning(
+                    "Planner agent Groq call failed; deterministic fallback used."
+                )
+        else:
+            planner_feedback.append(
+                "Groq is not configured; deterministic scheduling was used."
             )
-            provider = "groq"
         output = PlannerAgentOutput(
             schedule=create_schedule(
                 agent_input.request,
@@ -327,9 +375,13 @@ def build_plan_graph(
         )
         event = AgentTraceEntry(
             node="planner_agent",
-            decision=f"proposed {len(output.schedule)} deterministic study sessions",
+            decision=(
+                f"proposed {len(output.schedule)} deterministic study sessions"
+                if provider == "groq"
+                else f"proposed {len(output.schedule)} deterministic study sessions without Groq advice"
+            ),
             revision=agent_input.revision,
-            feedback=agent_input.revision_feedback,
+            feedback=planner_feedback,
             routed_to="feasibility_agent",
             provider=provider,
         )
@@ -381,33 +433,47 @@ def build_plan_graph(
             reserved_sessions=state.get("reserved_sessions", []),
         )
         deterministic = _deterministic_review(agent_input)
-        provider = "groq" if reviewer_model is not None else "deterministic_fallback"
+        provider = "deterministic_fallback"
+        trace_feedback = list(deterministic.feedback)
         if reviewer_model is None:
             decision = deterministic
-        else:
-            model_decision = reviewer_model(agent_input)
-            decision = ReviewerDecision(
-                approved=deterministic.approved and model_decision.approved,
-                rationale=model_decision.rationale,
-                feedback=list(dict.fromkeys(
-                    [*deterministic.feedback, *model_decision.feedback]
-                )),
-                warnings=list(dict.fromkeys(
-                    [*deterministic.warnings, *model_decision.warnings]
-                )),
+            trace_feedback.append(
+                "Groq is not configured; deterministic review was used."
             )
+        else:
+            try:
+                model_decision = reviewer_model(agent_input)
+                decision = ReviewerDecision(
+                    approved=deterministic.approved and model_decision.approved,
+                    rationale=model_decision.rationale,
+                    feedback=list(dict.fromkeys(
+                        [*deterministic.feedback, *model_decision.feedback]
+                    )),
+                    warnings=list(dict.fromkeys(
+                        [*deterministic.warnings, *model_decision.warnings]
+                    )),
+                )
+                provider = "groq"
+                trace_feedback = decision.feedback
+            except Exception:
+                decision = deterministic
+                trace_feedback.append(
+                    "Groq review failed; deterministic review was used."
+                )
+                LOGGER.warning(
+                    "Reviewer agent Groq call failed; deterministic fallback used."
+                )
 
         event = AgentTraceEntry(
             node="reviewer_agent",
             decision="approved" if decision.approved else "requested revision",
             revision=state.get("revision_count", 0),
-            feedback=decision.feedback,
+            feedback=trace_feedback,
             routed_to="revision_router",
             provider=provider,
         )
         return {
             "reviewer_feedback": decision,
-            "agent_mode": provider,
             "trace": [*state.get("trace", []), event],
         }
 
@@ -527,10 +593,6 @@ def generate_plan(
     configured_models = create_groq_agents() if not injected_models else None
     if configured_models is not None:
         priority_model, planner_model, reviewer_model = configured_models
-    provider_configured = any(
-        model is not None
-        for model in (priority_model, planner_model, reviewer_model)
-    )
     state = build_plan_graph(
         priority_model,
         planner_model,
@@ -557,7 +619,7 @@ def generate_plan(
         warnings=state["warnings"],
         agent_mode=(
             "groq"
-            if provider_configured
+            if any(entry.provider == "groq" for entry in state["trace"])
             else "deterministic_fallback"
         ),
         execution_trace=state["trace"],

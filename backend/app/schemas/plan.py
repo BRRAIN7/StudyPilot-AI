@@ -367,6 +367,18 @@ class PlanSummary(APIModel):
     passed_feasibility: bool
 
 
+class AgentActivityPlan(APIModel):
+    plan_id: str
+    created_at: datetime
+    updated_at: datetime
+    agent_mode: Literal["groq", "deterministic_fallback"]
+    execution_trace: list[AgentTraceEntry]
+
+
+class AgentActivityResponse(APIModel):
+    plans: list[AgentActivityPlan]
+
+
 class ProgressAnalyticsResponse(APIModel):
     total_plans: int
     total_sessions: int

@@ -71,7 +71,7 @@ def create_groq_agents() -> tuple[PriorityModel, PlannerModel, ReviewerModel] | 
 
         def model_for(output_model: type):
             return ChatGroq(
-                model="qwen/qwen3.8-27b",
+                model=settings.groq_model,
                 api_key=settings.groq_api_key,
                 temperature=0,
                 timeout=settings.groq_timeout_seconds,

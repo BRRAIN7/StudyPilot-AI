@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
@@ -11,8 +12,18 @@ class Base(DeclarativeBase):
 
 
 def _create_engine(database_url: str) -> Engine:
-    options = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=options)
+    normalized_url = (
+        "postgresql://" + database_url.removeprefix("postgres://")
+        if database_url.startswith("postgres://")
+        else database_url
+    )
+    parsed_url = make_url(normalized_url)
+    options = (
+        {"connect_args": {"check_same_thread": False}}
+        if parsed_url.get_backend_name() == "sqlite"
+        else {"pool_pre_ping": True}
+    )
+    return create_engine(normalized_url, **options)
 
 
 engine = _create_engine(settings.database_url)

@@ -12,7 +12,10 @@ class Settings:
     app_name: str = "StudyPilot AI"
     app_version: str = "0.1.0"
     app_description: str = "An adaptive academic planning system for students."
-    cors_origins: tuple[str, ...] = ("http://localhost:5173",)
+    cors_origins: tuple[str, ...] = (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    )
     timezone: str = "Asia/Kolkata"
     database_url: str = "sqlite:///./studypilot.db"
     groq_api_key: str | None = None
@@ -22,15 +25,18 @@ class Settings:
 
 def _load_settings() -> Settings:
     configured_origins = os.getenv("STUDYPILOT_CORS_ORIGINS")
-    origins = (
-        tuple(
+    if configured_origins:
+        origins = tuple(
             origin.strip()
             for origin in configured_origins.split(",")
             if origin.strip()
         )
-        if configured_origins
-        else ("http://localhost:5173",)
-    )
+    else:
+        origins = ("http://localhost:5173", "http://127.0.0.1:5173")
+    if "*" in origins:
+        raise ValueError(
+            "STUDYPILOT_CORS_ORIGINS must list explicit origins; wildcard CORS is not supported."
+        )
     return Settings(
         cors_origins=origins,
         database_url=os.getenv(

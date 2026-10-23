@@ -318,7 +318,8 @@ def test_academic_overview_aggregates_multiple_plans_and_progress(
     assert response.status_code == 200
     overview = response.json()
     assert overview["totalPlans"] == 4
-    assert overview["totalScheduledSessions"] == 4
+    total_saved_sessions = sum(len(saved["schedule"]) for saved in saved_plans)
+    assert overview["totalScheduledSessions"] == total_saved_sessions
     assert overview["completedSessions"] == 1
     assert overview["partiallyCompletedSessions"] == 1
     assert overview["missedSessions"] == 1
@@ -337,7 +338,7 @@ def test_academic_overview_aggregates_multiple_plans_and_progress(
     assert len(subject["topics"]) == 1
     topic = subject["topics"][0]
     assert topic["topicName"] == "Cell structure"
-    assert len(topic["sessions"]) == 4
+    assert len(topic["sessions"]) == total_saved_sessions
     assert sum(
         session["progressStatus"] == "completed"
         for session in topic["sessions"]
